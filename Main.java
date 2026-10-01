@@ -155,12 +155,17 @@ public class Main {
     private JTextArea outputArea;
     private JButton findButton;
     private JScrollPane scrollArea;                 // для подсветки при перетаскивании
+    private JButton themeButton;                     // кнопка переключения темы
+    private boolean darkTheme = false;
     private final Border scrollAreaBorder = BorderFactory.createEmptyBorder();
     private static final int MIN_FONT = 8;
     private static final int MAX_FONT = 32;
     /** Сколько строк прокручивает одно «щёлчок» колеса мыши. */
     private static final int WHEEL_LINES = 9;
     private int fontSize = 14;
+    /** Файл настроек: тема и шрифт сохраняются между запусками. */
+    private static final Path SETTINGS_FILE =
+            Paths.get(System.getProperty("user.home", "."), "parser_log_settings.properties");
 
     public static void main(String[] args) {
         // Системный вид Windows, чтобы отдельное приложение выглядело нативно
@@ -172,7 +177,51 @@ public class Main {
         SwingUtilities.invokeLater(() -> new Main().createAndShow());
     }
 
+    /**
+     * Загрузка сохраненных настроек (тема, шрифт).
+     * Если файла нет — светлая тема и шрифт 14 (значения по умолчанию).
+     */
+    private void loadSettings() {
+        if (!Files.isRegularFile(SETTINGS_FILE)) {
+            return;
+        }
+        java.util.Properties props = new java.util.Properties();
+        try (java.io.Reader r = Files.newBufferedReader(SETTINGS_FILE, StandardCharsets.UTF_8)) {
+            props.load(r);
+        } catch (Exception e) {
+            return; // поврежденный файл — молча используем умолчания
+        }
+        darkTheme = Boolean.parseBoolean(props.getProperty("darkTheme", "false"));
+        try {
+            fontSize = Math.max(MIN_FONT, Math.min(MAX_FONT,
+                    Integer.parseInt(props.getProperty("fontSize", "14").trim())));
+        } catch (NumberFormatException ignored) {
+            fontSize = 14;
+        }
+    }
+
+    /** Сохранение настроек при смене темы или шрифта. */
+    private void saveSettings() {
+        java.util.Properties props = new java.util.Properties();
+        props.setProperty("darkTheme", String.valueOf(darkTheme));
+        props.setProperty("fontSize", String.valueOf(fontSize));
+        try {
+            Path parent = SETTINGS_FILE.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+            try (java.io.Writer w = Files.newBufferedWriter(SETTINGS_FILE, StandardCharsets.UTF_8)) {
+                props.store(w, "Настройки программы ParserLog");
+            }
+        } catch (Exception ignored) {
+            // не смогли сохранить — не критично, программа работает
+        }
+    }
+
     private void createAndShow() {
+        // Сначала читаем сохраненные настройки: тема и шрифт прошлого запуска
+        loadSettings();
+
         frame = new JFrame("Парсер логов чеков");
         frame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
         frame.setSize(950, 700);
@@ -251,6 +300,16 @@ public class Main {
         fontPanel.add(fontMinus);
         fontPanel.add(fontSpinner);
         fontPanel.add(fontPlus);
+        // Кнопка переключения темы: светлая <-> темная
+        themeButton = new JButton(darkTheme ? "Тёмная тема ✓" : "Светлая тема ✓");
+        themeButton.setToolTipText("Переключить тёмную/светлую тему. Выбор запоминается");
+        fontPanel.add(Box.createHorizontalStrut(16));
+        fontPanel.add(themeButton);
+        themeButton.addActionListener(e -> {
+            applyTheme(!darkTheme);
+            themeButton.setText(darkTheme ? "Тёмная тема ✓" : "Светлая тема ✓");
+            saveSettings();
+        });
         c.gridx = 1; c.gridwidth = 2; c.weightx = 1;
         top.add(fontPanel, c);
         c.gridwidth = 1;
@@ -322,6 +381,9 @@ public class Main {
                 + "Ctrl+колесо — размер шрифта. Можно перетащить .txt файл из папки прямо в окно.");
         hint.setBorder(BorderFactory.createEmptyBorder(0, 8, 8, 8));
         frame.add(hint, BorderLayout.SOUTH);
+
+        // Применяем сохраненную тему до показа окна, чтобы не было мигания
+        applyTheme(darkTheme);
 
         frame.setLocationRelativeTo(null);
         frame.setVisible(true);
@@ -418,9 +480,90 @@ public class Main {
         };
     }
 
+    /**
+     * Переключение темы: темная или светлая.
+     * Swing не умеет темы «из коробки», поэтому раскрашиваем компоненты вручную
+     * рекурсивным обходом окна — так меняется всё: поля, кнопки, полосы, подписи.
+     */
+    private void applyTheme(boolean dark) {
+        darkTheme = dark;
+
+        Color bg = dark ? new Color(45, 45, 48) : new Color(240, 240, 240);
+        Color panelBg = dark ? new Color(52, 52, 55) : new Color(240, 240, 240);
+        Color fieldBg = dark ? new Color(60, 60, 64) : Color.WHITE;
+        Color fg = dark ? new Color(222, 222, 222) : Color.BLACK;
+        Color btnBg = dark ? new Color(70, 70, 74) : new Color(225, 225, 228);
+        Color selBg = dark ? new Color(0, 120, 215) : new Color(214, 228, 245);
+
+        frame.setBackground(bg);
+        frame.getRootPane().setBackground(bg);
+        styleComponent(frame.getContentPane(), bg, panelBg, fieldBg, fg, btnBg, selBg);
+
+        SwingUtilities.updateComponentTreeUI(frame);
+        frame.repaint();
+    }
+
+    /** Рекурсивная раскраска одного компонента и его детей. */
+    private void styleComponent(Component comp, Color bg, Color panelBg, Color fieldBg,
+                                Color fg, Color btnBg, Color selBg) {
+        if (comp instanceof JLabel) {
+            JLabel l = (JLabel) comp;
+            l.setForeground(fg);
+            if (l.isOpaque()) {
+                l.setBackground(panelBg);
+            }
+        } else if (comp instanceof JButton) {
+            JButton b = (JButton) comp;
+            b.setBackground(btnBg);
+            // Текст на кнопках всегда черный: серый фон + черный текст
+            // хорошо читается и в светлой, и в темной теме.
+            b.setForeground(Color.BLACK);
+            b.setOpaque(true);
+            b.setContentAreaFilled(true);
+            b.setBorderPainted(true);
+        } else if (comp instanceof JCheckBox) {
+            JCheckBox cb = (JCheckBox) comp;
+            cb.setBackground(panelBg);
+            cb.setForeground(fg);
+            cb.setOpaque(true);
+        } else if (comp instanceof JTextArea) {
+            JTextArea ta = (JTextArea) comp;
+            ta.setBackground(fieldBg);
+            ta.setForeground(fg);
+            ta.setCaretColor(fg);
+        } else if (comp instanceof JTextField) {
+            JTextField tf = (JTextField) comp;
+            tf.setBackground(fieldBg);
+            tf.setForeground(fg);
+            tf.setCaretColor(fg);
+        } else if (comp instanceof JSpinner) {
+            JSpinner sp = (JSpinner) comp;
+            sp.setBackground(fieldBg);
+            sp.setForeground(fg);
+            styleComponent(sp.getEditor(), bg, panelBg, fieldBg, fg, btnBg, selBg);
+        } else if (comp instanceof JScrollBar) {
+            JScrollBar sb = (JScrollBar) comp;
+            sb.setBackground(fieldBg);
+            sb.setForeground(fg);
+        } else if (comp instanceof JViewport) {
+            comp.setBackground(fieldBg);
+        } else if (comp instanceof JScrollPane) {
+            comp.setBackground(fieldBg);
+            comp.setForeground(fg);
+        } else if (comp instanceof JPanel || comp instanceof JRootPane) {
+            comp.setBackground(panelBg);
+            comp.setForeground(fg);
+        }
+
+        if (comp instanceof Container) {
+            for (Component child : ((Container) comp).getComponents()) {
+                styleComponent(child, bg, panelBg, fieldBg, fg, btnBg, selBg);
+            }
+        }
+    }
+
     /** Подсветка окна при перетаскивании файла / сброс подсветки. */
-    private void highlightDropArea(boolean on) {
-        if (scrollArea == null) {
+    private void highlightDropArea(boolean on) {        if (scrollArea == null) {
             return;
         }
         Runnable r = () -> {
@@ -462,6 +605,10 @@ public class Main {
             fontSpinner.setValue(fontSize);
         }
         applyFontSize();
+        // Запоминаем шрифт, чтобы в следующий раз открыть тем же размером
+        if (frame != null) {
+            saveSettings();
+        }
     }
 
     private void applyFontSize() {
